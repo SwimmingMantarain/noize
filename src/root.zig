@@ -26,8 +26,6 @@ pub const BiomeBlendCL = extern struct {
     percent: f64,
 };
 
-const FieldDisabled = struct {};
-
 pub const Gen = struct {
     alloc: std.mem.Allocator,
     type: Noise,
@@ -35,93 +33,87 @@ pub const Gen = struct {
     sharpness: f64,
     warp_strength: f64,
     zoom: f64,
-    opencl: if (config.use_cl) ?struct {
-        cl_context: cl.cl_context,
-        cl_devices: cl.cl_device_id,
-        cl_queue: cl.cl_command_queue,
-        worley_program: cl.cl_program = undefined,
-        worley_kernel: cl.cl_kernel = undefined,
+    oc: ?*anyopaque = null,
 
-        pub fn WorleyBlend32x32(self: *const @This(), gen: *Gen, comptime E: type, world_x_offset: i32, world_z_offset: i32) ![]BiomeBlendCL {
-            comptime if (@typeInfo(E) != .@"enum") @compileError("Expected enum type");
+    pub fn WorleyBlend32x32(self: *const @This(), gen: *Gen, comptime E: type, world_x_offset: i32, world_z_offset: i32) ![]BiomeBlendCL {
+        comptime if (@typeInfo(E) != .@"enum") @compileError("Expected enum type");
 
-            const num_biomes = @typeInfo(E).@"enum".fields.len;
-            const output_size_coords = 32 * 32;
-            const blends_per_coord = 9;
-            const total_blend_count = output_size_coords * blends_per_coord;
-            const output_buffer_size = total_blend_count * @sizeOf(BiomeBlendCL);
+        const num_biomes = @typeInfo(E).@"enum".fields.len;
+        const output_size_coords = 32 * 32;
+        const blends_per_coord = 9;
+        const total_blend_count = output_size_coords * blends_per_coord;
+        const output_buffer_size = total_blend_count * @sizeOf(BiomeBlendCL);
 
-            var err: cl.cl_int = undefined;
+        var err: cl.cl_int = undefined;
 
-            const output_mem = cl.clCreateBuffer(self.cl_context, cl.CL_MEM_WRITE_ONLY, output_buffer_size, null, &err);
-            if (err != cl.CL_SUCCESS) return error.OpenClBufferFailed;
-            defer _ = cl.clReleaseMemObject(output_mem);
+        const output_mem = cl.clCreateBuffer(self.cl_context, cl.CL_MEM_WRITE_ONLY, output_buffer_size, null, &err);
+        if (err != cl.CL_SUCCESS) return error.OpenClBufferFailed;
+        defer _ = cl.clReleaseMemObject(output_mem);
 
-            const zero = BiomeBlendCL{ .biome_id = 0, .percent = 0.0 };
-            err = cl.clEnqueueFillBuffer(self.cl_queue, output_mem, &zero, @sizeOf(BiomeBlendCL), 0, output_buffer_size, 0, null, null);
-            if (err != cl.CL_SUCCESS) return error.OpenCLWriteBuffFailed;
+        const zero = BiomeBlendCL{ .biome_id = 0, .percent = 0.0 };
+        err = cl.clEnqueueFillBuffer(self.cl_queue, output_mem, &zero, @sizeOf(BiomeBlendCL), 0, output_buffer_size, 0, null, null);
+        if (err != cl.CL_SUCCESS) return error.OpenCLWriteBuffFailed;
 
-            err = cl.clSetKernelArg(self.worley_kernel, 0, @sizeOf(cl.cl_mem), @ptrCast(&output_mem));
-            if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg0Failed;
+        err = cl.clSetKernelArg(self.worley_kernel, 0, @sizeOf(cl.cl_mem), @ptrCast(&output_mem));
+        if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg0Failed;
 
-            err = cl.clSetKernelArg(self.worley_kernel, 1, @sizeOf(u64), &gen.seed);
-            if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg1Failed;
+        err = cl.clSetKernelArg(self.worley_kernel, 1, @sizeOf(u64), &gen.seed);
+        if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg1Failed;
 
-            err = cl.clSetKernelArg(self.worley_kernel, 2, @sizeOf(f64), &gen.sharpness);
-            if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg2Failed;
+        err = cl.clSetKernelArg(self.worley_kernel, 2, @sizeOf(f64), &gen.sharpness);
+        if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg2Failed;
 
-            err = cl.clSetKernelArg(self.worley_kernel, 3, @sizeOf(f64), &gen.zoom);
-            if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg3Failed;
+        err = cl.clSetKernelArg(self.worley_kernel, 3, @sizeOf(f64), &gen.zoom);
+        if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg3Failed;
 
-            err = cl.clSetKernelArg(self.worley_kernel, 4, @sizeOf(f64), &@as(f64, @floatFromInt(world_x_offset)));
-            if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg4Failed;
+        err = cl.clSetKernelArg(self.worley_kernel, 4, @sizeOf(f64), &@as(f64, @floatFromInt(world_x_offset)));
+        if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg4Failed;
 
-            err = cl.clSetKernelArg(self.worley_kernel, 5, @sizeOf(f64), &@as(f64, @floatFromInt(world_z_offset)));
-            if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg5Failed;
+        err = cl.clSetKernelArg(self.worley_kernel, 5, @sizeOf(f64), &@as(f64, @floatFromInt(world_z_offset)));
+        if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg5Failed;
 
-            const num_biomes_u32: u32 = @intCast(num_biomes);
-            err = cl.clSetKernelArg(self.worley_kernel, 6, @sizeOf(u32), &num_biomes_u32);
-            if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg6Failed;
+        const num_biomes_u32: u32 = @intCast(num_biomes);
+        err = cl.clSetKernelArg(self.worley_kernel, 6, @sizeOf(u32), &num_biomes_u32);
+        if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg6Failed;
 
-            err = cl.clSetKernelArg(self.worley_kernel, 7, @sizeOf(f64), &gen.warp_strength);
-            if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg7Failed;
+        err = cl.clSetKernelArg(self.worley_kernel, 7, @sizeOf(f64), &gen.warp_strength);
+        if (err != cl.CL_SUCCESS) return error.OpenCLKernelArg7Failed;
 
-            const global_work_size = [2]usize{ 32, 32 }; // 32 * 32 = 1024 work items
-            err = cl.clEnqueueNDRangeKernel(
-                self.cl_queue,
-                self.worley_kernel,
-                2,
-                null,
-                &global_work_size,
-                null,
-                0,
-                null,
-                null,
-            );
-            if (err != cl.CL_SUCCESS) return error.OpenClKernelExecutionFailed;
+        const global_work_size = [2]usize{ 32, 32 }; // 32 * 32 = 1024 work items
+        err = cl.clEnqueueNDRangeKernel(
+            self.cl_queue,
+            self.worley_kernel,
+            2,
+            null,
+            &global_work_size,
+            null,
+            0,
+            null,
+            null,
+        );
+        if (err != cl.CL_SUCCESS) return error.OpenClKernelExecutionFailed;
 
-            const host_buffer = try gen.alloc.alloc(BiomeBlendCL, total_blend_count);
-            errdefer gen.alloc.free(host_buffer);
+        const host_buffer = try gen.alloc.alloc(BiomeBlendCL, total_blend_count);
+        errdefer gen.alloc.free(host_buffer);
 
-            err = cl.clEnqueueReadBuffer(
-                self.cl_queue,
-                output_mem,
-                cl.CL_TRUE,
-                0,
-                output_buffer_size,
-                host_buffer.ptr,
-                0,
-                null,
-                null,
-            );
-            if (err != cl.CL_SUCCESS) {
-                std.log.err("Failed to read OpenCL buffer: {}", .{err});
-                return error.OpenClReadBufferFailed;
-            }
-
-            return host_buffer;
+        err = cl.clEnqueueReadBuffer(
+            self.cl_queue,
+            output_mem,
+            cl.CL_TRUE,
+            0,
+            output_buffer_size,
+            host_buffer.ptr,
+            0,
+            null,
+            null,
+        );
+        if (err != cl.CL_SUCCESS) {
+            std.log.err("Failed to read OpenCL buffer: {}", .{err});
+            return error.OpenClReadBufferFailed;
         }
-    } else FieldDisabled,
+
+        return host_buffer;
+    }
 
     pub fn init(self: *Gen) !void {
         if (!config.use_cl) return;
